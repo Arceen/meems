@@ -18,9 +18,12 @@ export default function WordPalace() {
     const [timeLimit, setTimeLimit] = useState(300); // 5 minutes
     const [abstractPercentage, setAbstractPercentage] = useState(50); // % of abstract words
 
+    const [recallMode, setRecallMode] = useState<'ordered' | 'unordered'>('ordered');
+
     // Game Data
     const [words, setWords] = useState<string[]>([]);
-    const [userInput, setUserInput] = useState<string>("");
+    const [userInputs, setUserInputs] = useState<string[]>([]);
+    const [recallOrder, setRecallOrder] = useState<number[]>([]);
     const [startTime, setStartTime] = useState<number>(0);
     const [endTime, setEndTime] = useState<number>(0);
     const [timeLeft, setTimeLeft] = useState(0);
@@ -52,9 +55,16 @@ export default function WordPalace() {
         const newWords = generateWords(count, abstractPct);
         setWords(newWords);
         setTimeLeft(time);
+        
+        let order = Array.from({ length: count }, (_, i) => i);
+        if (recallMode === 'unordered') {
+            order = order.sort(() => Math.random() - 0.5);
+        }
+        setRecallOrder(order);
+        setUserInputs(Array(count).fill(""));
+
         setGameState('memorize');
         setStartTime(Date.now());
-        setUserInput("");
     };
 
     const finishMemorization = () => {
@@ -99,20 +109,12 @@ export default function WordPalace() {
     }, [gameState]);
 
     const calculateScore = () => {
-        const userWords = userInput
-            .split('\n')
-            .map(w => w.trim().toLowerCase())
-            .filter(w => w.length > 0);
-
         let correctCount = 0;
-        const normalizedWords = words.map(w => w.toLowerCase());
-
-        userWords.forEach((userWord, idx) => {
-            if (idx < normalizedWords.length && userWord === normalizedWords[idx]) {
+        words.forEach((word, idx) => {
+            if (userInputs[idx] && userInputs[idx].trim().toLowerCase() === word.toLowerCase()) {
                 correctCount++;
             }
         });
-
         return correctCount;
     };
 
@@ -173,6 +175,26 @@ export default function WordPalace() {
                                     {abstractPercentage}% Abstract / {100 - abstractPercentage}% Concrete
                                 </div>
                             </div>
+
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Recall Mode</label>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                        className={`btn ${recallMode === 'ordered' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setRecallMode('ordered')}
+                                        style={{ flex: 1 }}
+                                    >
+                                        Ordered
+                                    </button>
+                                    <button
+                                        className={`btn ${recallMode === 'unordered' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setRecallMode('unordered')}
+                                        style={{ flex: 1 }}
+                                    >
+                                        Unordered
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
                         <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => startGame()}>
@@ -228,19 +250,49 @@ export default function WordPalace() {
                     <div className="animate-fade-in">
                         <div style={{ marginBottom: '1.5rem' }}>
                             <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>Recall Phase</h2>
-                            <p style={{ opacity: 0.7 }}>Type the words in order, one per line.</p>
+                            <p style={{ opacity: 0.7 }}>Fill in the words for each position.</p>
                         </div>
 
-                        <textarea
-                            className="input-field"
-                            style={{ minHeight: '400px', fontFamily: 'inherit', fontSize: '1rem' }}
-                            value={userInput}
-                            onChange={(e) => setUserInput(e.target.value)}
-                            placeholder="Word 1&#10;Word 2&#10;Word 3&#10;..."
-                            autoFocus
-                        />
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                            gap: '1rem',
+                            fontSize: '1.1rem'
+                        }}>
+                            {recallOrder.map((originalIdx) => (
+                                <div key={originalIdx} style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <label style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '0.25rem' }}>
+                                        Word {originalIdx + 1}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="input-field"
+                                        style={{ width: '100%', padding: '0.5rem', fontFamily: 'inherit' }}
+                                        value={userInputs[originalIdx]}
+                                        onChange={(e) => {
+                                            const newInputs = [...userInputs];
+                                            newInputs[originalIdx] = e.target.value;
+                                            setUserInputs(newInputs);
+                                        }}
+                                        autoFocus={recallOrder[0] === originalIdx}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                const currentIdx = recallOrder.indexOf(originalIdx);
+                                                if (currentIdx < recallOrder.length - 1) {
+                                                    const nextInput = document.getElementById(`recall-input-${recallOrder[currentIdx + 1]}`);
+                                                    if (nextInput) nextInput.focus();
+                                                } else {
+                                                    submitRecall();
+                                                }
+                                            }
+                                        }}
+                                        id={`recall-input-${originalIdx}`}
+                                    />
+                                </div>
+                            ))}
+                        </div>
 
-                        <div style={{ marginTop: '1.5rem' }}>
+                        <div style={{ marginTop: '2rem' }}>
                             <button className="btn btn-primary" style={{ width: '100%' }} onClick={submitRecall}>
                                 Submit Recall
                             </button>
@@ -285,11 +337,12 @@ export default function WordPalace() {
                                 <div>
                                     <div style={{ fontSize: '0.9rem', opacity: 0.6, marginBottom: '0.5rem' }}>Your Recall:</div>
                                     <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '0.5rem', minHeight: '200px' }}>
-                                        {userInput.split('\n').filter(w => w.trim()).map((word, idx) => {
-                                            const isCorrect = idx < words.length && word.trim().toLowerCase() === words[idx].toLowerCase();
+                                        {words.map((word, idx) => {
+                                            const userWord = userInputs[idx] || '';
+                                            const isCorrect = userWord.trim().toLowerCase() === word.toLowerCase();
                                             return (
                                                 <div key={idx} style={{ marginBottom: '0.25rem', color: isCorrect ? 'var(--success)' : 'var(--error)' }}>
-                                                    {idx + 1}. {word}
+                                                    {idx + 1}. {userWord || '(Empty)'}
                                                 </div>
                                             );
                                         })}
