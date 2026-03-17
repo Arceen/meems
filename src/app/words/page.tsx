@@ -10,8 +10,10 @@ type GameState = 'config' | 'memorize' | 'recall' | 'result';
 export default function WordMemorization() {
     const [gameState, setGameState] = useState<GameState>('config');
     const [wordCount, setWordCount] = useState<number | ''>(10);
+    const [recallMode, setRecallMode] = useState<'ordered' | 'unordered'>('ordered');
     const [generatedWords, setGeneratedWords] = useState<string[]>([]);
-    const [userInput, setUserInput] = useState('');
+    const [userInputs, setUserInputs] = useState<string[]>([]);
+    const [recallOrder, setRecallOrder] = useState<number[]>([]);
 
     const [memorizeStartTime, setMemorizeStartTime] = useState(0);
     const [memorizeDuration, setMemorizeDuration] = useState(0);
@@ -37,31 +39,30 @@ export default function WordMemorization() {
         setMemorizeDuration(now - memorizeStartTime);
         setGameState('recall');
         setRecallStartTime(now);
-        setUserInput('');
-        setTimeout(() => inputRef.current?.focus(), 100);
+        
+        let order = Array.from({ length: generatedWords.length }, (_, i) => i);
+        if (recallMode === 'unordered') {
+            order = order.sort(() => Math.random() - 0.5);
+        }
+        setRecallOrder(order);
+        setUserInputs(Array(generatedWords.length).fill(''));
+        
+        // setTimeout(() => inputRef.current?.focus(), 100);
     };
 
     const calculateScore = () => {
-        // Split user input by whitespace, comma, or newline
-        const inputWords = userInput.trim().split(/[\s,]+/).filter(w => w.length > 0).map(w => w.toLowerCase());
-        const targetWords = generatedWords.map(w => w.toLowerCase());
-
         let correct = 0;
-        const total = targetWords.length;
-        const attemptedCount = inputWords.length;
+        const total = generatedWords.length;
+        let attemptedCount = 0;
         const comparison = [];
 
         for (let i = 0; i < total; i++) {
-            const target = targetWords[i];
-            const input = inputWords[i] || '';
-            const isCorrect = target === input;
+            const target = generatedWords[i];
+            const input = userInputs[i] || '';
+            const isCorrect = input.trim().toLowerCase() === target.toLowerCase();
             if (isCorrect) correct++;
+            if (input.trim() !== '') attemptedCount++;
             comparison.push({ target, input, isCorrect });
-        }
-
-        // Check for extra words
-        for (let i = total; i < inputWords.length; i++) {
-            comparison.push({ target: '', input: inputWords[i], isCorrect: false });
         }
 
         // Accuracy: Correct / Attempted
@@ -100,7 +101,7 @@ export default function WordMemorization() {
     const resetGame = () => {
         setGameState('config');
         setGeneratedWords([]);
-        setUserInput('');
+        setUserInputs([]);
         setMemorizeDuration(0);
         setRecallDuration(0);
     };
@@ -164,6 +165,26 @@ export default function WordMemorization() {
                                         style={{ textAlign: 'center', fontSize: '1.2rem', width: '120px' }}
                                     />
                                 </div>
+
+                                <div style={{ marginBottom: '1.5rem' }}>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', textAlign: 'center' }}>Recall Mode</label>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button
+                                            className={`btn ${recallMode === 'ordered' ? 'btn-primary' : 'btn-secondary'}`}
+                                            onClick={() => setRecallMode('ordered')}
+                                            style={{ flex: 1 }}
+                                        >
+                                            Ordered
+                                        </button>
+                                        <button
+                                            className={`btn ${recallMode === 'unordered' ? 'btn-primary' : 'btn-secondary'}`}
+                                            onClick={() => setRecallMode('unordered')}
+                                            style={{ flex: 1 }}
+                                        >
+                                            Unordered
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                             <button onClick={startMemorization} className="btn btn-primary" style={{ width: '100%', maxWidth: '400px' }}>
                                 Start Memorization
@@ -202,22 +223,49 @@ export default function WordMemorization() {
 
                     {gameState === 'recall' && (
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
-                            <p style={{ marginBottom: '1rem', color: '#cbd5e1' }}>Enter the words you memorized (separated by space or newline):</p>
-                            <textarea
-                                ref={inputRef}
-                                value={userInput}
-                                onChange={(e) => setUserInput(e.target.value)}
-                                className="input-field"
-                                autoCapitalize="none"
-                                autoComplete="off"
-                                spellCheck="false"
-                                style={{
-                                    minHeight: '200px',
-                                    fontSize: '1.2rem',
-                                    marginBottom: '2rem'
-                                }}
-                                placeholder="Type words here..."
-                            />
+                            <p style={{ marginBottom: '1rem', color: '#cbd5e1' }}>Fill in the words for each position:</p>
+                            
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                                gap: '1rem',
+                                fontSize: '1.1rem',
+                                width: '100%',
+                                marginBottom: '2rem'
+                            }}>
+                                {recallOrder.map((originalIdx) => (
+                                    <div key={originalIdx} style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <label style={{ fontSize: '0.8rem', opacity: 0.7, marginBottom: '0.25rem' }}>
+                                            Word {originalIdx + 1}
+                                        </label>
+                                        <input
+                                            type="text"
+                                            className="input-field"
+                                            style={{ width: '100%', padding: '0.5rem', fontFamily: 'inherit' }}
+                                            value={userInputs[originalIdx]}
+                                            onChange={(e) => {
+                                                const newInputs = [...userInputs];
+                                                newInputs[originalIdx] = e.target.value;
+                                                setUserInputs(newInputs);
+                                            }}
+                                            autoFocus={recallOrder[0] === originalIdx}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    const currentIdx = recallOrder.indexOf(originalIdx);
+                                                    if (currentIdx < recallOrder.length - 1) {
+                                                        const nextInput = document.getElementById(`recall-input-${recallOrder[currentIdx + 1]}`);
+                                                        if (nextInput) nextInput.focus();
+                                                    } else {
+                                                        finishGame();
+                                                    }
+                                                }
+                                            }}
+                                            id={`recall-input-${originalIdx}`}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            
                             <button onClick={finishGame} className="btn btn-primary" style={{ width: '100%', maxWidth: '400px' }}>
                                 Finish & Check
                             </button>
