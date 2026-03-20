@@ -20,6 +20,10 @@ export default function WordMemorization() {
     const [recallStartTime, setRecallStartTime] = useState(0);
     const [recallDuration, setRecallDuration] = useState(0);
 
+    const [timeLimitMinutes, setTimeLimitMinutes] = useState<number | ''>(1);
+    const [timeLimitSeconds, setTimeLimitSeconds] = useState<number | ''>(0);
+    const [timeLeft, setTimeLeft] = useState<number | null>(null);
+
     const inputRef = useRef<HTMLTextAreaElement>(null);
 
     const startMemorization = () => {
@@ -30,9 +34,28 @@ export default function WordMemorization() {
         const shuffled = [...wordList].sort(() => 0.5 - Math.random());
         const selected = shuffled.slice(0, finalCount);
         setGeneratedWords(selected);
+
+        const mins = typeof timeLimitMinutes === 'number' ? timeLimitMinutes : 0;
+        const secs = typeof timeLimitSeconds === 'number' ? timeLimitSeconds : 0;
+        setTimeLeft(mins * 60 + secs);
+
         setGameState('memorize');
         setMemorizeStartTime(Date.now());
     };
+
+    // Timer logic for memorization phase
+    useEffect(() => {
+        if (gameState === 'memorize' && timeLeft !== null) {
+            if (timeLeft <= 0) {
+                startRecall();
+                return;
+            }
+            const timer = setTimeout(() => {
+                setTimeLeft(timeLeft - 1);
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [gameState, timeLeft]);
 
     const startRecall = () => {
         const now = Date.now();
@@ -166,6 +189,41 @@ export default function WordMemorization() {
                                     />
                                 </div>
 
+                                <div style={{ marginBottom: '1.5rem', width: '100%' }}>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', color: '#cbd5e1', textAlign: 'center' }}>Memorization Time Limits</label>
+                                    <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                value={timeLimitMinutes}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setTimeLimitMinutes(val === '' ? '' : parseInt(val));
+                                                }}
+                                                className="input-field"
+                                                style={{ width: '80px', textAlign: 'center' }}
+                                            />
+                                            <span style={{ fontSize: '0.9rem', opacity: 0.7 }}>min</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="59"
+                                                value={timeLimitSeconds}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setTimeLimitSeconds(val === '' ? '' : parseInt(val));
+                                                }}
+                                                className="input-field"
+                                                style={{ width: '80px', textAlign: 'center' }}
+                                            />
+                                            <span style={{ fontSize: '0.9rem', opacity: 0.7 }}>sec</span>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <div style={{ marginBottom: '1.5rem' }}>
                                     <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', textAlign: 'center' }}>Recall Mode</label>
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -194,7 +252,18 @@ export default function WordMemorization() {
 
                     {gameState === 'memorize' && (
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
-                            <p style={{ marginBottom: '1rem', color: '#cbd5e1' }}>Memorize these words in order:</p>
+                            {timeLeft !== null && (
+                                <div style={{
+                                    fontSize: '2rem',
+                                    fontWeight: 'bold',
+                                    color: timeLeft <= 10 ? 'var(--error)' : 'var(--primary)',
+                                    marginBottom: '1rem',
+                                    fontFamily: 'monospace'
+                                }}>
+                                    {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+                                </div>
+                            )}
+                            <p style={{ marginBottom: '1rem', color: '#cbd5e1' }}>Memorize these words{recallMode === 'ordered' ? ' in order' : ''}:</p>
                             <div className="glass" style={{
                                 padding: '1.5rem',
                                 borderRadius: '1rem',
