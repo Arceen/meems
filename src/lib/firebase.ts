@@ -920,73 +920,41 @@ export const endTrainingSession = async (
     }
 };
 
-// Get time statistics
+// Get time statistics — derived from game_results so all drills contribute
 export const getTimeStats = async (
     userId: string = USER_ID,
     timeFilter?: TimeFilter
 ): Promise<TimeStats> => {
     try {
         if (!firebaseConfig.apiKey) {
-            return {
-                totalTime: 0,
-                sessionCount: 0,
-                completedSessions: 0,
-                incompleteSessions: 0,
-                byExercise: {}
-            };
+            return { totalTime: 0, sessionCount: 0, completedSessions: 0, incompleteSessions: 0, byExercise: {} };
         }
 
-        const sessionsRef = collection(db, 'training_sessions', userId, 'sessions');
-        const q = query(sessionsRef, orderBy('startTime', 'desc'));
-        const snapshot = await getDocs(q);
-
-        let sessions = snapshot.docs.map(doc => doc.data() as TrainingSession);
-
-        // Apply time filter
-        if (timeFilter && timeFilter !== 'all') {
-            const cutoff = getCalendarCutoff(timeFilter);
-            sessions = sessions.filter(s => s.startTime >= cutoff);
-        }
+        const results = await getGameResults(timeFilter);
 
         let totalTime = 0;
-        let completedSessions = 0;
-        let incompleteSessions = 0;
         const byExercise: Record<string, { totalTime: number; sessionCount: number }> = {};
 
-        sessions.forEach(session => {
-            const sessionTime = session.duration || 0;
-            totalTime += sessionTime;
+        for (const r of results) {
+            const durationMs = ((r.memorizeTime ?? 0) + (r.recallTime ?? 0)) * 1000;
+            if (durationMs <= 0) continue;
 
-            if (session.completed) {
-                completedSessions++;
-            } else {
-                incompleteSessions++;
-            }
-
-            if (!byExercise[session.exerciseType]) {
-                byExercise[session.exerciseType] = { totalTime: 0, sessionCount: 0 };
-            }
-
-            byExercise[session.exerciseType].totalTime += sessionTime;
-            byExercise[session.exerciseType].sessionCount++;
-        });
+            totalTime += durationMs;
+            if (!byExercise[r.type]) byExercise[r.type] = { totalTime: 0, sessionCount: 0 };
+            byExercise[r.type].totalTime += durationMs;
+            byExercise[r.type].sessionCount++;
+        }
 
         return {
             totalTime,
-            sessionCount: sessions.length,
-            completedSessions,
-            incompleteSessions,
-            byExercise
+            sessionCount: results.length,
+            completedSessions: results.length,
+            incompleteSessions: 0,
+            byExercise,
         };
     } catch (error) {
         console.error('Error getting time stats:', error);
-        return {
-            totalTime: 0,
-            sessionCount: 0,
-            completedSessions: 0,
-            incompleteSessions: 0,
-            byExercise: {}
-        };
+        return { totalTime: 0, sessionCount: 0, completedSessions: 0, incompleteSessions: 0, byExercise: {} };
     }
 };
 

@@ -74,7 +74,7 @@ function OverviewTab({ results, timeStats }: { results: GameResult[]; timeStats:
                 <StatChip label="Current Streak" value={`${currentStreak}d`} color={currentStreak >= 7 ? 'var(--success)' : currentStreak >= 3 ? 'orange' : 'inherit'} />
                 <StatChip label="Longest Streak" value={`${longestStreak}d`} color="var(--accent)" />
                 <StatChip label="Total Sessions" value={totalSessions} />
-                <StatChip label="Total Time" value={formatDuration(totalTimeMs)} sub="from session tracking" />
+                <StatChip label="Total Time" value={formatDuration(totalTimeMs)} />
             </div>
 
             {/* Activity chart */}
@@ -460,18 +460,17 @@ function TimeTab({ timeStats }: { timeStats: TimeStats | null }) {
     if (!timeStats) {
         return (
             <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', opacity: 0.6 }}>
-                No session time data available yet. Session tracking requires Firebase.
+                No time data yet. Play any drill to see stats here.
             </div>
         );
     }
 
-    const completionRate = timeStats.sessionCount > 0
-        ? Math.round((timeStats.completedSessions / timeStats.sessionCount) * 100)
-        : 0;
-
     const avgSessionMs = timeStats.sessionCount > 0
         ? timeStats.totalTime / timeStats.sessionCount
         : 0;
+
+    const topExercise = Object.entries(timeStats.byExercise)
+        .sort((a, b) => b[1].totalTime - a[1].totalTime)[0];
 
     // Bar chart: time by exercise
     const exerciseData = Object.entries(timeStats.byExercise)
@@ -492,9 +491,10 @@ function TimeTab({ timeStats }: { timeStats: TimeStats | null }) {
                 <StatChip label="Total Time" value={formatDuration(timeStats.totalTime)} />
                 <StatChip label="Total Sessions" value={timeStats.sessionCount} />
                 <StatChip label="Avg Session" value={formatDuration(avgSessionMs)} />
-                <StatChip label="Completion Rate" value={`${completionRate}%`}
-                    color={completionRate >= 80 ? 'var(--success)' : completionRate >= 50 ? 'orange' : 'var(--error)'}
-                    sub={`${timeStats.completedSessions} of ${timeStats.sessionCount}`} />
+                {topExercise && (
+                    <StatChip label="Most Time" value={getGameConfig(topExercise[0]).label}
+                        sub={formatDuration(topExercise[1].totalTime)} />
+                )}
             </div>
 
             {/* Time by exercise */}
