@@ -124,6 +124,8 @@ export default function CardBlitz() {
                 percentage,
                 memorizeTime: mode === 'blitz' ? timeTaken : 0,
                 recallTime: mode === 'recall' ? timeTaken : 0,
+                precision: percentage,
+                completeness: 100,
             });
         } catch (error) {
             console.error('Failed to save Card Blitz result:', error);

@@ -24,6 +24,7 @@ export default function QuickMath() {
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const gameStartTimeRef = useRef<number>(0);
 
     const generateProblem = () => {
         const min = Math.pow(10, digitCount - 1);
@@ -54,6 +55,7 @@ export default function QuickMath() {
     const startGame = () => {
         setScore({ correct: 0, total: 0 });
         setTimeLeft(timeLimit);
+        gameStartTimeRef.current = Date.now();
         setGameState('playing');
         generateProblem();
         setUserAnswer('');
@@ -98,6 +100,9 @@ export default function QuickMath() {
         if (timerRef.current) clearInterval(timerRef.current);
         setGameState('result');
 
+        const elapsed = gameStartTimeRef.current > 0
+            ? Math.round((Date.now() - gameStartTimeRef.current) / 1000)
+            : timeLimit;
         const percentage = score.total > 0 ? Math.round((score.correct / score.total) * 100) : 0;
 
         await saveGameResult({
@@ -107,7 +112,9 @@ export default function QuickMath() {
             total: score.total,
             percentage,
             memorizeTime: 0,
-            recallTime: timeLimit,
+            recallTime: elapsed,
+            precision: percentage,
+            completeness: 100,
         });
     };
 

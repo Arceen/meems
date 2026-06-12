@@ -98,11 +98,13 @@ export default function Decathlon() {
         await saveGameResult({
             type: 'decathlon',
             count: disciplines.length,
-            correct: disciplines.length, // Completion-based
+            correct: disciplines.length,
             total: disciplines.length,
             percentage: 100,
             memorizeTime: totalTime,
             recallTime: 0,
+            precision: 100,
+            completeness: 100,
         });
     };
 

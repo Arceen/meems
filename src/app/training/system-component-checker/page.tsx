@@ -147,6 +147,8 @@ export default function SystemComponentChecker() {
                     percentage: accuracy,
                     memorizeTime: totalTime,
                     recallTime: 0,
+                    precision: accuracy,
+                    completeness: 100,
                 });
             } catch (error) {
                 console.error('Failed to save System Checker result:', error);
@@ -202,7 +204,12 @@ export default function SystemComponentChecker() {
 
     const generateQuestions = () => {
         const generated: DrillQuestion[] = [];
-        const availableMajor = majorSystem.filter((entry) => entry.images?.length);
+        const availableMajor = majorSystem.filter(entry =>
+            (entry.images?.length ?? 0) > 0 ||
+            (entry.persons?.length ?? 0) > 0 ||
+            (entry.actions?.length ?? 0) > 0 ||
+            (entry.objects?.length ?? 0) > 0
+        );
         const availablePao = paoSystem.filter((entry) => entry.person || entry.action || entry.object);
         const usedIds = new Set<string>(); // Track used entries to avoid duplicates
 
@@ -313,32 +320,30 @@ export default function SystemComponentChecker() {
         const sanitized = skip ? '' : answer;
         const isCorrect = !skip && normalize(sanitized) === normalize(currentQuestion.answer);
 
-        // Save card stats if this is a Major System question
+        // Save card attempt (major system = bare key; PAO = namespaced key)
         if (currentQuestion.category === 'major-image' || currentQuestion.category === 'major-reverse') {
-            // Extract card number from source or answer depending on question type
-            let cardNumber = '';
-            let questionType: 'digits' | 'words' = 'digits';
-
-            if (currentQuestion.category === 'major-image') {
-                // Prompt: "What is the word for {number}?" -> Source is number
-                cardNumber = currentQuestion.source;
-                questionType = 'digits';
-            } else {
-                // Prompt: "What is the number for {word}?" -> Answer is number
-                cardNumber = currentQuestion.answer;
-                questionType = 'words';
-            }
-
+            const cardNumber = currentQuestion.category === 'major-image'
+                ? currentQuestion.source
+                : currentQuestion.answer;
             const attempt: CardAttempt = {
                 cardNumber,
                 isCorrect,
-                responseTime: duration * 1000, // Convert to ms
+                responseTime: duration * 1000,
                 timestamp: Date.now(),
-                questionType
+                questionType: currentQuestion.category === 'major-image' ? 'digits' : 'words',
+                system: 'major',
             };
-            
-            // Fire and forget - don't await to keep UI snappy
-            saveCardAttempt(attempt).catch(err => console.error("Failed to save card attempt:", err));
+            saveCardAttempt(attempt).catch(err => console.error('Failed to save card attempt:', err));
+        } else if (currentQuestion.category === 'pao-person' || currentQuestion.category === 'pao-action' || currentQuestion.category === 'pao-object') {
+            const attempt: CardAttempt = {
+                cardNumber: `cardpao:${currentQuestion.source}`,
+                isCorrect,
+                responseTime: duration * 1000,
+                timestamp: Date.now(),
+                questionType: 'words',
+                system: 'card-pao',
+            };
+            saveCardAttempt(attempt).catch(err => console.error('Failed to save PAO attempt:', err));
         }
 
         const newResponse: DrillResponse = {

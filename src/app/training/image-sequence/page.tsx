@@ -136,6 +136,8 @@ export default function ImageSequence() {
             percentage: Math.round((correct / imageCount) * 100),
             memorizeTime: memorizeTime / 1000,
             recallTime: (endTime - startTime) / 1000,
+            precision: Math.round((correct / imageCount) * 100),
+            completeness: 100,
         });
     };
 

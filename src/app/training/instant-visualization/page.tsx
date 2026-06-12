@@ -102,6 +102,8 @@ export default function InstantVisualizationTest() {
                     percentage: Math.round((formed / total) * 100),
                     memorizeTime: totalDuration,
                     recallTime: 0,
+                    precision: Math.round((formed / total) * 100),
+                    completeness: 100,
                 });
             } catch (error) {
                 console.error('Failed to save Instant Visualization score:', error);

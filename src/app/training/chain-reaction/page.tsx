@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import wordList from '@/data/words.json';
+import { saveGameResult } from '@/lib/firebase';
 
 type GamePhase = 'config' | 'encoding' | 'drill' | 'results';
 type ItemType = 'words' | 'digits';
@@ -216,6 +217,33 @@ export default function ChainReactionLatencyPage() {
     };
 
     const stats = phase === 'results' ? calculateStats() : null;
+
+    // Persist a summary once per finished run
+    const resultSavedRef = useRef(false);
+    useEffect(() => {
+        if (phase === 'config') {
+            resultSavedRef.current = false;
+            return;
+        }
+        if (phase !== 'results' || resultSavedRef.current || chainResults.length === 0) return;
+        resultSavedRef.current = true;
+
+        const correctFirstTry = chainResults.filter(r => r.attemptCount === 0).length;
+        const totalEncodingMs = encodingResults.reduce((sum, r) => sum + r.encodingTime, 0);
+        const totalChainMs = chainResults.reduce((sum, r) => sum + r.chainLatency, 0);
+
+        saveGameResult({
+            type: 'chain-reaction',
+            count: sequence.length,
+            correct: correctFirstTry,
+            total: chainResults.length,
+            percentage: Math.round((correctFirstTry / chainResults.length) * 100),
+            memorizeTime: Math.round(totalEncodingMs / 1000),
+            recallTime: Math.round(totalChainMs / 1000),
+            precision: Math.round((correctFirstTry / chainResults.length) * 100),
+            completeness: Math.round((chainResults.length / sequence.length) * 100),
+        }).catch(err => console.error('Failed to save chain-reaction result:', err));
+    }, [phase, chainResults, encodingResults, sequence.length]);
 
     return (
         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>

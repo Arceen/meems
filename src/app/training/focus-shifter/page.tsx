@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { saveGameResult } from '@/lib/firebase';
 
 type GamePhase = 'config' | 'encoding' | 'recall' | 'results';
 
@@ -154,6 +155,39 @@ export default function FocusShifterPage() {
 
     const currentItem = sequence[currentIndex];
     const results = phase === 'results' ? calculateResults() : null;
+
+    // Persist a summary once per finished run
+    const resultSavedRef = useRef(false);
+    useEffect(() => {
+        if (phase === 'config') {
+            resultSavedRef.current = false;
+            return;
+        }
+        if (phase !== 'results' || resultSavedRef.current || answers.length === 0 || sequence.length === 0) return;
+        resultSavedRef.current = true;
+
+        let totalCorrect = 0;
+        answers.forEach((answer, idx) => {
+            const item = sequence[idx];
+            if (answer.numberAnswer === item.number) totalCorrect++;
+            if (answer.colorAnswer.toLowerCase() === item.visualColor.toLowerCase()) totalCorrect++;
+            if (answer.objectAnswer.toLowerCase() === item.visualObject.toLowerCase()) totalCorrect++;
+            if (answer.positionAnswer === item.visualPosition) totalCorrect++;
+        });
+        const totalQuestions = sequence.length * 4;
+
+        saveGameResult({
+            type: 'focus-shifter',
+            count: sequence.length,
+            correct: totalCorrect,
+            total: totalQuestions,
+            percentage: Math.round((totalCorrect / totalQuestions) * 100),
+            memorizeTime: Math.round(sequence.length * itemDuration),
+            recallTime: Math.round(totalTime / 1000),
+            precision: Math.round((totalCorrect / totalQuestions) * 100),
+            completeness: 100,
+        }).catch(err => console.error('Failed to save focus-shifter result:', err));
+    }, [phase, answers, sequence, itemDuration, totalTime]);
 
     return (
         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>

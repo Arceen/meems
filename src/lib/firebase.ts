@@ -1,8 +1,10 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, addDoc, query, orderBy, getDocs, doc, setDoc, getDoc, deleteDoc, where } from "firebase/firestore";
 
+export type TimeFilter = '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all';
+
 // Helper function to get time cutoffs for filters
-const getCalendarCutoff = (timeFilter: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'): number => {
+export const getCalendarCutoff = (timeFilter: TimeFilter): number => {
     if (timeFilter === 'all') return 0;
 
     const now = Date.now();
@@ -32,7 +34,7 @@ const getCalendarCutoff = (timeFilter: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' 
 export const getCardHistory = async (
     cardNumber: string,
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'
+    timeFilter?: TimeFilter
 ): Promise<CardAttempt[]> => {
     try {
         if (!firebaseConfig.apiKey) {
@@ -76,7 +78,7 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 
 export interface GameResult {
-    type: 'digit' | 'word' | 'number-wall' | 'card-blitz' | 'binary-surge' | 'spoken-numbers' | 'names-gauntlet' | 'word-palace' | 'decathlon' | 'abstract-matrix' | 'multilingual-list' | 'instant-visualization' | 'sensory-walkthrough' | 'system-checker' | 'philosophical-attribution' | 'n-back' | 'quick-math' | 'card-sequence' | 'names-international' | 'image-sequence' | 'visualization-latency' | 'urban-locus-tracer';
+    type: 'digit' | 'word' | 'number-wall' | 'card-blitz' | 'binary-surge' | 'spoken-numbers' | 'names-gauntlet' | 'word-palace' | 'decathlon' | 'abstract-matrix' | 'multilingual-list' | 'instant-visualization' | 'sensory-walkthrough' | 'system-checker' | 'philosophical-attribution' | 'n-back' | 'quick-math' | 'card-sequence' | 'names-international' | 'image-sequence' | 'visualization-latency' | 'urban-locus-tracer' | 'chain-reaction' | 'focus-shifter' | 'image-vault-quiz' | 'historic-dates' | 'spoken-words' | 'srs-review';
     count: number;
     correct: number;
     total: number;
@@ -85,8 +87,18 @@ export interface GameResult {
     recallTime: number;
     timestamp: number;
     date: string;
+    // Legacy aliases kept for backward compatibility
     accuracy?: number;
     recallPercentage?: number;
+    // Standardized metrics (Phase 2+)
+    /** Items encoded per minute = (count / memorizeTime) * 60. Auto-computed in saveGameResult when memorizeTime > 0. */
+    encodingSpeed?: number;
+    /** Precision: correct / attempted * 100. Diagnoses image quality. */
+    precision?: number;
+    /** Completeness: attempted / total * 100. Diagnoses journey/capacity. */
+    completeness?: number;
+    /** True when the session used a standardized benchmark config. */
+    isBenchmark?: boolean;
 }
 
 // Image Vault Data Structures
@@ -149,13 +161,24 @@ export const saveGameResult = async (result: Omit<GameResult, 'timestamp' | 'dat
             return false;
         }
 
+        // Auto-compute encoding speed when a meaningful memorize phase exists
+        const encodingSpeed =
+            result.memorizeTime > 0 && result.count > 0
+                ? Math.round((result.count / result.memorizeTime) * 60)
+                : undefined;
+
         const now = new Date();
         const data: GameResult = {
             ...result,
+            ...(encodingSpeed !== undefined ? { encodingSpeed } : {}),
             timestamp: now.getTime(),
             date: now.toISOString().split('T')[0]
         };
         await addDoc(collection(db, "game_results"), data);
+
+        // Update personal records silently — never block the caller on a PR failure
+        updatePersonalRecord(result.type, data).catch(() => {});
+
         return true;
     } catch (e) {
         console.error("Error adding document: ", e);
@@ -163,17 +186,15 @@ export const saveGameResult = async (result: Omit<GameResult, 'timestamp' | 'dat
     }
 };
 
-export const getGameResults = async () => {
+export const getGameResults = async (timeFilter?: TimeFilter): Promise<GameResult[]> => {
     try {
-        if (!firebaseConfig.apiKey) {
-            return [];
-        }
-        // Order by timestamp descending for better performance (most recent first)
-        // We can reverse if needed, but typically we want recent data first
+        if (!firebaseConfig.apiKey) return [];
         const q = query(collection(db, "game_results"), orderBy("timestamp", "desc"));
         const querySnapshot = await getDocs(q);
-        // Reverse to get chronological order (oldest first) for charts
-        return querySnapshot.docs.map(doc => doc.data() as GameResult).reverse();
+        const all = querySnapshot.docs.map(doc => doc.data() as GameResult);
+        const cutoff = timeFilter ? getCalendarCutoff(timeFilter) : 0;
+        const filtered = cutoff > 0 ? all.filter(r => r.timestamp >= cutoff) : all;
+        return filtered.reverse();
     } catch (e) {
         console.error("Error getting documents: ", e);
         return [];
@@ -398,6 +419,8 @@ export interface CardAttempt {
     responseTime: number; // milliseconds
     timestamp: number;
     questionType: 'digits' | 'words'; // which direction was tested
+    /** Namespaced: 'cardpao:KH', 'digitpao:7'. Undefined = legacy bare major key '00'–'99'. */
+    system?: 'major' | 'card-pao' | 'digit-pao';
 }
 
 export interface CardStats {
@@ -427,7 +450,7 @@ export const saveCardAttempt = async (attempt: CardAttempt, userId: string = USE
 
 export const getCardStats = async (
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'
+    timeFilter?: TimeFilter
 ): Promise<Map<string, CardStats>> => {
     try {
         if (!firebaseConfig.apiKey) {
@@ -530,6 +553,37 @@ export const getCardPerformanceColor = (stats: CardStats | undefined): string =>
     }
 };
 
+/**
+ * One-time migration: copies each MajorEntry's `images[0]` into `objects[0]` so
+ * the PAO structure becomes the canonical source. Keeps `images` for rollback.
+ * Safe to call multiple times — skips entries that already have objects.
+ */
+export const migrateMajorImagesToPao = async (userId: string = USER_ID): Promise<{ migrated: number; skipped: number }> => {
+    let migrated = 0;
+    let skipped = 0;
+    try {
+        if (!firebaseConfig.apiKey) return { migrated, skipped };
+        const docRef = doc(db, 'image_vault', userId);
+        const snap = await getDoc(docRef);
+        if (!snap.exists()) return { migrated, skipped };
+
+        const data = snap.data() as ImageVaultData;
+        const updated = (data.majorSystem ?? []).map(entry => {
+            const hasObjects = entry.objects?.length > 0;
+            const hasImage = entry.images && entry.images.length > 0;
+            if (hasObjects || !hasImage) { skipped++; return entry; }
+            migrated++;
+            return { ...entry, objects: [entry.images![0]], ...(entry.persons ? {} : { persons: [] }), ...(entry.actions ? {} : { actions: [] }) };
+        });
+
+        await setDoc(docRef, { ...data, majorSystem: updated, lastUpdated: Date.now() });
+        return { migrated, skipped };
+    } catch (error) {
+        console.error('Error migrating major images to PAO:', error);
+        return { migrated, skipped };
+    }
+};
+
 export interface DailyGlobalStats {
     date: string; // YYYY-MM-DD
     totalAttempts: number;
@@ -540,7 +594,7 @@ export interface DailyGlobalStats {
 
 export const getGlobalDailyStats = async (
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'
+    timeFilter?: TimeFilter
 ): Promise<DailyGlobalStats[]> => {
     try {
         if (!firebaseConfig.apiKey) {
@@ -598,7 +652,7 @@ export const getGlobalDailyStats = async (
 export const getCardDailyStats = async (
     cardNumber: string,
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'
+    timeFilter?: TimeFilter
 ): Promise<DailyGlobalStats[]> => {
     try {
         if (!firebaseConfig.apiKey) {
@@ -869,7 +923,7 @@ export const endTrainingSession = async (
 // Get time statistics
 export const getTimeStats = async (
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all'
+    timeFilter?: TimeFilter
 ): Promise<TimeStats> => {
     try {
         if (!firebaseConfig.apiKey) {
@@ -939,7 +993,7 @@ export const getTimeStats = async (
 // Get session history
 export const getSessionHistory = async (
     userId: string = USER_ID,
-    timeFilter?: '1h' | '2h' | '12h' | '1d' | '1w' | '1m' | '1y' | 'all',
+    timeFilter?: TimeFilter,
     exerciseType?: string
 ): Promise<TrainingSession[]> => {
     try {
@@ -965,5 +1019,226 @@ export const getSessionHistory = async (
     } catch (error) {
         console.error('Error getting session history:', error);
         return [];
+    }
+};
+
+// ===== PERSONAL RECORDS =====
+
+export interface PersonalRecord {
+    drillType: string;
+    /** Highest precision (correct/attempted %) in any session. */
+    bestPrecision: number;
+    /** Most items memorized at any accuracy level. */
+    bestCount: number;
+    /** Highest items/minute at ≥90% precision. */
+    bestEncodingSpeed: number;
+    /** Highest completeness (attempted/total %) in any session. */
+    bestCompleteness: number;
+    achievedAt: number;
+    config?: Record<string, unknown>;
+}
+
+export interface PersonalRecords {
+    records: Record<string, PersonalRecord>;
+    lastUpdated: number;
+}
+
+const PR_EMPTY: PersonalRecord = {
+    drillType: '',
+    bestPrecision: 0,
+    bestCount: 0,
+    bestEncodingSpeed: 0,
+    bestCompleteness: 0,
+    achievedAt: 0,
+};
+
+export const getPersonalRecords = async (userId: string = USER_ID): Promise<PersonalRecords> => {
+    try {
+        if (!firebaseConfig.apiKey) return { records: {}, lastUpdated: 0 };
+        const ref = doc(db, 'personal_records', userId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) return snap.data() as PersonalRecords;
+        return { records: {}, lastUpdated: 0 };
+    } catch (error) {
+        console.error('Error fetching personal records:', error);
+        return { records: {}, lastUpdated: 0 };
+    }
+};
+
+export const updatePersonalRecord = async (
+    drillType: string,
+    result: GameResult,
+    userId: string = USER_ID
+): Promise<boolean> => {
+    try {
+        if (!firebaseConfig.apiKey) return false;
+
+        const ref = doc(db, 'personal_records', userId);
+        const snap = await getDoc(ref);
+        const existing: PersonalRecords = snap.exists()
+            ? (snap.data() as PersonalRecords)
+            : { records: {}, lastUpdated: 0 };
+
+        const prev: PersonalRecord = existing.records[drillType] ?? { ...PR_EMPTY, drillType };
+
+        const precision = result.precision ?? result.accuracy ?? result.percentage;
+        const completeness = result.completeness ?? result.recallPercentage ?? 100;
+        const encodingSpeed = result.encodingSpeed ?? 0;
+
+        // Only write if at least one PR improved
+        const precisionImproved = precision > prev.bestPrecision;
+        const countImproved = result.count > prev.bestCount;
+        const speedImproved = precision >= 90 && encodingSpeed > prev.bestEncodingSpeed;
+        const completenessImproved = completeness > prev.bestCompleteness;
+
+        if (!precisionImproved && !countImproved && !speedImproved && !completenessImproved) {
+            return false;
+        }
+
+        const updated: PersonalRecord = {
+            drillType,
+            bestPrecision: precisionImproved ? precision : prev.bestPrecision,
+            bestCount: countImproved ? result.count : prev.bestCount,
+            bestEncodingSpeed: speedImproved ? encodingSpeed : prev.bestEncodingSpeed,
+            bestCompleteness: completenessImproved ? completeness : prev.bestCompleteness,
+            achievedAt: Date.now(),
+        };
+
+        await setDoc(ref, {
+            records: { ...existing.records, [drillType]: updated },
+            lastUpdated: Date.now(),
+        });
+        return true;
+    } catch (error) {
+        console.error('Error updating personal record:', error);
+        return false;
+    }
+};
+
+// ===== SRS STATE =====
+
+export interface SrsItemState {
+    itemKey: string;
+    ease: number;
+    intervalDays: number;
+    dueAt: number;
+    reps: number;
+    lapses: number;
+}
+
+export interface SrsStateDoc {
+    items: Record<string, SrsItemState>;
+    lastUpdated: number;
+}
+
+export const getSrsState = async (userId: string = USER_ID): Promise<SrsStateDoc> => {
+    try {
+        if (!firebaseConfig.apiKey) return { items: {}, lastUpdated: 0 };
+        const ref = doc(db, 'srs_state', userId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) return snap.data() as SrsStateDoc;
+        return { items: {}, lastUpdated: 0 };
+    } catch (error) {
+        console.error('Error getting SRS state:', error);
+        return { items: {}, lastUpdated: 0 };
+    }
+};
+
+export const saveSrsState = async (state: SrsStateDoc, userId: string = USER_ID): Promise<boolean> => {
+    try {
+        if (!firebaseConfig.apiKey) return false;
+        const ref = doc(db, 'srs_state', userId);
+        await setDoc(ref, { ...state, lastUpdated: Date.now() });
+        return true;
+    } catch (error) {
+        console.error('Error saving SRS state:', error);
+        return false;
+    }
+};
+
+// ===== DRILL PRESETS =====
+
+export interface DrillPreset {
+    id: string;
+    name: string;
+    config: Record<string, unknown>;
+    createdAt: number;
+}
+
+export interface DrillPresetsDoc {
+    /** Keyed by gameType */
+    presets: Record<string, DrillPreset[]>;
+    lastUpdated: number;
+}
+
+export const getDrillPresets = async (userId: string = USER_ID): Promise<DrillPresetsDoc> => {
+    try {
+        if (!firebaseConfig.apiKey) return { presets: {}, lastUpdated: 0 };
+        const ref = doc(db, 'drill_presets', userId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) return snap.data() as DrillPresetsDoc;
+        return { presets: {}, lastUpdated: 0 };
+    } catch (error) {
+        console.error('Error fetching drill presets:', error);
+        return { presets: {}, lastUpdated: 0 };
+    }
+};
+
+export const saveDrillPreset = async (
+    gameType: string,
+    preset: Omit<DrillPreset, 'id' | 'createdAt'>,
+    userId: string = USER_ID
+): Promise<DrillPreset | null> => {
+    try {
+        if (!firebaseConfig.apiKey) return null;
+        const ref = doc(db, 'drill_presets', userId);
+        const snap = await getDoc(ref);
+        const existing: DrillPresetsDoc = snap.exists()
+            ? (snap.data() as DrillPresetsDoc)
+            : { presets: {}, lastUpdated: 0 };
+
+        const newPreset: DrillPreset = {
+            ...preset,
+            id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            createdAt: Date.now(),
+        };
+
+        const updated = {
+            presets: {
+                ...existing.presets,
+                [gameType]: [...(existing.presets[gameType] ?? []), newPreset],
+            },
+            lastUpdated: Date.now(),
+        };
+
+        await setDoc(ref, updated);
+        return newPreset;
+    } catch (error) {
+        console.error('Error saving drill preset:', error);
+        return null;
+    }
+};
+
+export const deleteDrillPreset = async (
+    gameType: string,
+    presetId: string,
+    userId: string = USER_ID
+): Promise<boolean> => {
+    try {
+        if (!firebaseConfig.apiKey) return false;
+        const ref = doc(db, 'drill_presets', userId);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) return false;
+
+        const existing = snap.data() as DrillPresetsDoc;
+        const filtered = (existing.presets[gameType] ?? []).filter(p => p.id !== presetId);
+        await setDoc(ref, {
+            presets: { ...existing.presets, [gameType]: filtered },
+            lastUpdated: Date.now(),
+        });
+        return true;
+    } catch (error) {
+        console.error('Error deleting drill preset:', error);
+        return false;
     }
 };

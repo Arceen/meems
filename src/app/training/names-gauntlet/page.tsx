@@ -106,11 +106,13 @@ export default function NamesGauntlet() {
         await saveGameResult({
             type: 'names-gauntlet',
             count: faceCount,
-            correct: correctCount, // Total points (1 per name part)
-            total: faceCount * 2, // 2 points per face
+            correct: correctCount,
+            total: faceCount * 2,
             percentage: Math.round((correctCount / (faceCount * 2)) * 100),
             memorizeTime: memorizeTimeSeconds,
             recallTime: 0,
+            precision: Math.round((correctCount / (faceCount * 2)) * 100),
+            completeness: 100,
         });
 
         setGameState('result');

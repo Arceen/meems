@@ -261,6 +261,33 @@ const games: Game[] = [
         href: '/training/multilingual-list',
         color: 'from-orange-500 to-red-500',
         date: '2023-10-08'
+    },
+    {
+        id: 'srs-review',
+        title: 'SRS Review',
+        description: 'Spaced repetition queue. Reviews due major system cards with adaptive intervals.',
+        difficulty: 'foundational',
+        href: '/training/review',
+        color: 'from-emerald-500 to-green-400',
+        date: '2026-06-12'
+    },
+    {
+        id: 'historic-dates',
+        title: 'Historic Dates',
+        description: 'Memorize years for real or fictional historical events. WMC-format drill.',
+        difficulty: 'intermediate',
+        href: '/training/historic-dates',
+        color: 'from-purple-500 to-violet-500',
+        date: '2026-06-12'
+    },
+    {
+        id: 'spoken-words',
+        title: 'Spoken Words',
+        description: 'Memorize words read aloud at a timed pace. One per line in recall.',
+        difficulty: 'beginner',
+        href: '/training/spoken-words',
+        color: 'from-amber-500 to-yellow-400',
+        date: '2026-06-12'
     }
 ];
 

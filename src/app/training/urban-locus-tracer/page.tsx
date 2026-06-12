@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { saveLandmark, getLandmarks, deleteLandmark, updateLandmark, type Landmark } from '@/lib/firebase';
+import { saveLandmark, getLandmarks, deleteLandmark, updateLandmark, saveGameResult, type Landmark } from '@/lib/firebase';
 import RealMap from '@/components/RealMap';
 
 type GamePhase = 'add' | 'recall' | 'result';
@@ -424,6 +424,31 @@ export default function UrbanLocusTracerPage() {
     const averageError = recallResults.length ? (recallResults.reduce((sum, r) => sum + r.distanceError, 0) / recallResults.length) : 0;
     const averageTimeMs = recallResults.length ? totalRecallTimeMs / recallResults.length : 0;
     const sortedByError = recallResults.length ? [...recallResults].sort((a, b) => a.distanceError - b.distanceError) : [];
+
+    // Persist a summary once per finished run; a guess counts as correct under 100m
+    // (same threshold the result list uses for its green highlight).
+    const resultSavedRef = useRef(false);
+    useEffect(() => {
+        if (phase === 'add') {
+            resultSavedRef.current = false;
+            return;
+        }
+        if (phase !== 'result' || resultSavedRef.current || recallResults.length === 0) return;
+        resultSavedRef.current = true;
+
+        const correct = recallResults.filter(r => r.distanceError < 100).length;
+        saveGameResult({
+            type: 'urban-locus-tracer',
+            count: recallResults.length,
+            correct,
+            total: recallResults.length,
+            percentage: Math.round((correct / recallResults.length) * 100),
+            memorizeTime: 0,
+            recallTime: Math.round(totalRecallTimeMs / 1000),
+            precision: Math.round((correct / recallResults.length) * 100),
+            completeness: 100,
+        }).catch(err => console.error('Failed to save urban-locus-tracer result:', err));
+    }, [phase, recallResults, totalRecallTimeMs]);
     const bestResult = sortedByError[0];
     const worstResult = sortedByError.length > 0 ? sortedByError[sortedByError.length - 1] : undefined;
     

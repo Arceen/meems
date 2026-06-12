@@ -95,13 +95,15 @@ export default function InternationalNames() {
         const memorizeTimeSeconds = Math.floor((endTime - startTime) / 1000);
 
         await saveGameResult({
-            type: 'names-gauntlet', // Reusing type for now
+            type: 'names-international',
             count: faceCount,
             correct: correctCount,
             total: faceCount * 2,
             percentage: Math.round((correctCount / (faceCount * 2)) * 100),
             memorizeTime: memorizeTimeSeconds,
             recallTime: 0,
+            precision: Math.round((correctCount / (faceCount * 2)) * 100),
+            completeness: 100,
         });
 
         setGameState('result');

@@ -408,6 +408,8 @@ export default function MultilingualList() {
             percentage: Math.round((correctCount / words.length) * 100),
             memorizeTime: memorizeTimeSeconds,
             recallTime: 0,
+            precision: Math.round((correctCount / words.length) * 100),
+            completeness: 100,
         });
 
         setGameState('result');

@@ -101,10 +101,12 @@ export default function AbstractMatrix() {
             type: 'abstract-matrix',
             count: cellCount,
             correct: correctCount,
-            total: cellCount * 2, // 2 points per cell (coordinate + number)
+            total: cellCount * 2,
             percentage: Math.round((correctCount / (cellCount * 2)) * 100),
             memorizeTime: memorizeTimeSeconds,
             recallTime: 0,
+            precision: Math.round((correctCount / (cellCount * 2)) * 100),
+            completeness: 100,
         });
 
         setGameState('result');

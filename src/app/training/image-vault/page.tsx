@@ -32,7 +32,9 @@ import {
     type TimeStats,
     getSessionHistory,
     type TrainingSession,
-    bootstrapDigitPaoSystem
+    bootstrapDigitPaoSystem,
+    saveGameResult,
+    migrateMajorImagesToPao,
 } from '@/lib/firebase';
 import { majorSystemList } from '@/data/major-system';
 import { cardPaoList } from '@/data/card-pao';
@@ -69,6 +71,10 @@ export default function ImageVault() {
     const [newMajorPerson, setNewMajorPerson] = useState('');
     const [newMajorAction, setNewMajorAction] = useState('');
     const [newMajorObject, setNewMajorObject] = useState('');
+
+    // Migration state
+    const [migrating, setMigrating] = useState(false);
+    const [migrateResult, setMigrateResult] = useState<{ migrated: number; skipped: number } | null>(null);
 
     // Analytics State
     const [majorViewMode, setMajorViewMode] = useState<'cards' | 'analytics'>('cards');
@@ -722,6 +728,32 @@ export default function ImageVault() {
             setCurrentSessionId(null);
         }
     };
+
+    // Persist a quiz summary once per finished run so it shows up in analytics
+    const quizResultSavedRef = useRef(false);
+    useEffect(() => {
+        if (quizMode !== 'result') {
+            quizResultSavedRef.current = false;
+            return;
+        }
+        const totalAttempts = quizStats.correct + quizStats.wrong;
+        if (quizResultSavedRef.current || totalAttempts === 0) return;
+        quizResultSavedRef.current = true;
+
+        saveGameResult({
+            type: 'image-vault-quiz',
+            count: totalAttempts,
+            correct: quizStats.correct,
+            total: totalAttempts,
+            percentage: Math.round((quizStats.correct / totalAttempts) * 100),
+            memorizeTime: 0,
+            recallTime: quizStats.endTime > quizStats.startTime
+                ? Math.round((quizStats.endTime - quizStats.startTime) / 1000)
+                : 0,
+            precision: Math.round((quizStats.correct / totalAttempts) * 100),
+            completeness: 100,
+        }).catch(err => console.error('Failed to save image vault quiz result:', err));
+    }, [quizMode, quizStats]);
 
     const startQuiz = () => {
         let pool = [...majorSystem];
@@ -1535,13 +1567,34 @@ export default function ImageVault() {
                                         </select>
 
                                         {majorViewMode === 'cards' && (
-                                            <button
-                                                onClick={() => setQuizMode('config')}
-                                                className="btn btn-primary"
-                                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                                            >
-                                                <span>⚡</span> Start Drill
-                                            </button>
+                                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                {/* Migration: copy images[0] → objects[0] for PAO structure */}
+                                                <button
+                                                    onClick={async () => {
+                                                        setMigrating(true);
+                                                        const result = await migrateMajorImagesToPao();
+                                                        setMigrateResult(result);
+                                                        setMigrating(false);
+                                                        if (result.migrated > 0) {
+                                                            const data = await import('@/lib/firebase').then(m => m.getImageVaultData());
+                                                            if (data) setMajorSystem(data.majorSystem);
+                                                        }
+                                                    }}
+                                                    className="btn btn-secondary"
+                                                    style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
+                                                    disabled={migrating}
+                                                    title="Copy legacy images[] into objects[] so the PAO structure is canonical"
+                                                >
+                                                    {migrating ? 'Migrating…' : migrateResult ? `✓ ${migrateResult.migrated} migrated` : 'Migrate images → PAO'}
+                                                </button>
+                                                <button
+                                                    onClick={() => setQuizMode('config')}
+                                                    className="btn btn-primary"
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                                >
+                                                    <span>⚡</span> Start Drill
+                                                </button>
+                                            </div>
                                         )}
                                     </div>
                                 </div>

@@ -260,6 +260,8 @@ export default function VisualizationLatencyDrill() {
                 percentage: recallAccuracy,
                 memorizeTime: (drillEndRef.current - sessionStartRef.current) / 1000,
                 recallTime: (Date.now() - drillEndRef.current) / 1000,
+                precision: recallAccuracy,
+                completeness: 100,
             });
         } catch (error) {
             console.error('Failed to save result:', error);

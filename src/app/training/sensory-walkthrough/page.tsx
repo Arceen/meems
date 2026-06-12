@@ -148,6 +148,8 @@ export default function SensoryWalkthrough() {
                     percentage: Math.round((answered / total) * 100),
                     memorizeTime: duration,
                     recallTime: 0,
+                    precision: Math.round((answered / total) * 100),
+                    completeness: 100,
                 });
             } catch (error) {
                 console.error('Failed to save Sensory Walkthrough result:', error);

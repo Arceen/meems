@@ -200,8 +200,10 @@ export default function PhilosophicalAttribution() {
                     correct,
                     total: totalQuestions,
                     percentage,
-                    memorizeTime: duration,
-                    recallTime: 0
+                    memorizeTime: 0,
+                    recallTime: duration,
+                    precision: percentage,
+                    completeness: 100,
                 });
             } catch (error) {
                 console.error('Failed to save Philosophical Attribution result:', error);

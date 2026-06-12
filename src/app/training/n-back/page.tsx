@@ -224,6 +224,8 @@ export default function NBack() {
             percentage: totalPercentage,
             memorizeTime: 0,
             recallTime: timeTaken,
+            precision: totalPercentage,
+            completeness: 100,
         });
     };
 

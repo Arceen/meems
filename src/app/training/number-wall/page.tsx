@@ -1,142 +1,86 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
-import Header from '@/components/Header';
-import Link from 'next/link';
-import { saveGameResult } from '@/lib/firebase';
+import { useState } from 'react';
+import PresetManager from '@/components/drill/PresetManager';
+import { useDrillEngine } from '@/hooks/useDrillEngine';
+import DrillShell from '@/components/drill/DrillShell';
+import CountdownTimer from '@/components/drill/CountdownTimer';
+import ResultsCard from '@/components/drill/ResultsCard';
+import StatBox from '@/components/drill/StatBox';
+import ToggleGroup from '@/components/drill/ToggleGroup';
+import { generateDigits, formatTime, clamp } from '@/lib/drill-utils';
 
-type GameState = 'setup' | 'memorize' | 'recall' | 'result';
+interface NumberWallConfig {
+    digitCount: number;
+    timeLimit: number; // seconds
+    groupSize: 5 | 10;
+}
 
 export default function NumberWall() {
-    const [gameState, setGameState] = useState<GameState>('setup');
+    const engine = useDrillEngine<NumberWallConfig>({
+        gameType: 'number-wall',
+        defaultConfig: { digitCount: 100, timeLimit: 300, groupSize: 5 }
+    });
+    const { phase, config, setConfig } = engine;
 
-    // Settings
-    const [digitCount, setDigitCount] = useState(100);
-    const [timeLimit, setTimeLimit] = useState(300); // seconds
-    const [groupSize, setGroupSize] = useState(5); // 5 or 10
-
-    // Game Data
     const [digits, setDigits] = useState<string>("");
     const [userInput, setUserInput] = useState<string>("");
-    const [startTime, setStartTime] = useState<number>(0);
-    const [endTime, setEndTime] = useState<number>(0);
-    const [timeLeft, setTimeLeft] = useState(0);
-    const [isSavingResult, setIsSavingResult] = useState(false);
 
-    // Timer Ref
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const startGame = (count = config.digitCount, time = config.timeLimit) => {
+        const sanitizedCount = clamp(count, 5, 1000);
+        const sanitizedTime = clamp(time, 30, 3600);
 
-    const generateDigits = (count: number) => {
-        let result = "";
-        for (let i = 0; i < count; i++) {
-            result += Math.floor(Math.random() * 10).toString();
-        }
-        return result;
-    };
-
-    const startWeek1Challenge = () => {
-        setDigitCount(150);
-        setTimeLimit(600); // 10 minutes
-        setGroupSize(10); // Standard comp grouping often 10, or user pref. Let's stick to 5 or 10.
-        startGame(150, 600);
-    };
-
-    const clampDigitCount = (value: number) => {
-        if (!Number.isFinite(value)) return 5;
-        return Math.max(5, Math.min(1000, Math.floor(value)));
-    };
-
-    const clampTimeLimit = (value: number) => {
-        if (!Number.isFinite(value)) return 60;
-        return Math.max(30, Math.min(3600, Math.floor(value)));
-    };
-
-    const startGame = (count = digitCount, time = timeLimit) => {
-        const sanitizedCount = clampDigitCount(count);
-        const sanitizedTime = clampTimeLimit(time);
-
-        if (sanitizedCount !== digitCount) setDigitCount(sanitizedCount);
-        if (sanitizedTime !== timeLimit) setTimeLimit(sanitizedTime);
-
-        const newDigits = generateDigits(sanitizedCount);
-        setDigits(newDigits);
-        setTimeLeft(sanitizedTime);
-        setGameState('memorize');
-        setStartTime(Date.now());
-        setEndTime(0);
+        setDigits(generateDigits(sanitizedCount));
         setUserInput("");
+        engine.start({
+            config: { digitCount: sanitizedCount, timeLimit: sanitizedTime },
+            memorizeSeconds: sanitizedTime
+        });
     };
 
-    const finishMemorization = () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-        setEndTime(Date.now());
-        setGameState('recall');
+    // Score is the number of correct digits before the first error.
+    const calculateScore = () => {
+        const cleanInput = userInput.replace(/\s/g, '');
+        let correctCount = 0;
+        for (let i = 0; i < digits.length; i++) {
+            if (i < cleanInput.length && cleanInput[i] === digits[i]) {
+                correctCount++;
+            } else {
+                break;
+            }
+        }
+        return correctCount;
     };
 
     const submitRecall = async () => {
-        if (!digits.length || isSavingResult) {
+        if (!digits.length || engine.saving) {
             console.warn('Tried to submit recall without generated digits.');
-            if (!digits.length) setGameState('setup');
+            if (!digits.length) engine.reset();
             return;
         }
 
         const correctCount = calculateScore();
-        const memorizeEnd = endTime || Date.now();
-        const memorizeStart = startTime || memorizeEnd;
-        const memorizeTimeSeconds = Math.max(0, Math.floor((memorizeEnd - memorizeStart) / 1000));
-
         const cleanInput = userInput.replace(/\s/g, '');
         const attemptedCount = cleanInput.length;
 
-        // Accuracy: Correct / Attempted
+        // Accuracy: Correct / Attempted; Recall %: Attempted / Total Target
         const accuracy = attemptedCount > 0 ? Math.round((correctCount / attemptedCount) * 100) : 0;
-
-        // Recall Percentage: Attempted / Total Target
         const recallPercentage = digits.length ? Math.round((attemptedCount / digits.length) * 100) : 0;
 
-        setEndTime(memorizeEnd);
-        setIsSavingResult(true);
-        setGameState('result');
-
-        try {
-            await saveGameResult({
-                type: 'number-wall',
-                count: digitCount,
-                correct: correctCount,
-                total: digits.length,
-                percentage: accuracy, // Use accuracy as the main percentage for consistency with other games? Or maybe recall? User wants accuracy to be 100% if 50/50.
-                accuracy,
-                recallPercentage,
-                memorizeTime: memorizeTimeSeconds,
-                recallTime: 0,
-            });
-        } catch (error) {
-            console.error('Failed to save Number Wall result:', error);
-        } finally {
-            setIsSavingResult(false);
-        }
+        await engine.finishRecall({
+            count: config.digitCount,
+            correct: correctCount,
+            total: digits.length,
+            percentage: accuracy,
+            precision: accuracy,
+            completeness: recallPercentage,
+            accuracy,
+            recallPercentage,
+        });
     };
 
-    // Timer Logic
-    useEffect(() => {
-        if (gameState === 'memorize' && timeLeft > 0) {
-            timerRef.current = setInterval(() => {
-                setTimeLeft((prev) => {
-                    if (prev <= 1) {
-                        finishMemorization();
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-        }
-        return () => {
-            if (timerRef.current) clearInterval(timerRef.current);
-        };
-    }, [gameState]);
-
     // Formatting for display
-    const formatDigits = (allDigits: string, group: number) => {
+    const formatDigitGroups = (allDigits: string, group: number) => {
         const chunks = [];
         for (let i = 0; i < allDigits.length; i += group) {
             chunks.push(allDigits.slice(i, i + group));
@@ -144,252 +88,168 @@ export default function NumberWall() {
         return chunks;
     };
 
-    // Scoring Logic
-    const calculateScore = () => {
-        let correctCount = 0;
-        const cleanInput = userInput.replace(/\s/g, '');
-        const cleanActual = digits;
-
-        for (let i = 0; i < cleanActual.length; i++) {
-            if (i < cleanInput.length && cleanInput[i] === cleanActual[i]) {
-                correctCount++;
-            } else {
-                break; // Stop at first error for standard memory sports scoring (often) or just count correct? 
-                // User prompt: "Score is based on the number of correct digits before the first error."
-            }
-        }
-        return correctCount;
-    };
-
-    const formatTime = (seconds: number) => {
-        const mins = Math.floor(seconds / 60);
-        const secs = seconds % 60;
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
-    };
+    const cleanInputLength = userInput.replace(/\s/g, '').length;
 
     return (
-        <>
-            <Header />
-            <main className="container" style={{ maxWidth: '800px' }}>
+        <DrillShell title="The Number Wall">
+            {/* SETUP SCREEN */}
+            {phase === 'setup' && (
+                <div className="glass card animate-fade-in">
+                    <h2 style={{ marginBottom: '1.5rem', fontSize: '1.2rem' }}>Configuration</h2>
 
-                {/* Header / Breadcrumbs */}
-                <div style={{ marginBottom: '2rem' }}>
-                    <Link href="/training" style={{ fontSize: '0.9rem', opacity: 0.7, marginBottom: '0.5rem', display: 'inline-block' }}>
-                        ← Back to Training
-                    </Link>
-                    <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>The Number Wall</h1>
-                </div>
+                    <div style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Digit Count</label>
+                            <input
+                                type="number"
+                                className="input-field"
+                                value={config.digitCount}
+                                min={5}
+                                max={1000}
+                                onChange={(e) => {
+                                    const nextValue = parseInt(e.target.value, 10);
+                                    setConfig(prev => ({ ...prev, digitCount: Number.isNaN(nextValue) ? 0 : nextValue }));
+                                }}
+                            />
+                        </div>
 
-                {/* SETUP SCREEN */}
-                {gameState === 'setup' && (
-                    <div className="glass card animate-fade-in">
-                        <h2 style={{ marginBottom: '1.5rem', fontSize: '1.2rem' }}>Configuration</h2>
-
-                        <div style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Digit Count</label>
-                                <input
-                                    type="number"
-                                    className="input-field"
-                                    value={digitCount}
-                                    min={5}
-                                    max={1000}
-                                    onChange={(e) => {
-                                        const nextValue = parseInt(e.target.value, 10);
-                                        setDigitCount(Number.isNaN(nextValue) ? 0 : nextValue);
-                                    }}
-                                />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Time Limit (Seconds)</label>
-                                <input
-                                    type="number"
-                                    className="input-field"
-                                    value={timeLimit}
-                                    min={30}
-                                    max={3600}
-                                    onChange={(e) => {
-                                        const nextValue = parseInt(e.target.value, 10);
-                                        setTimeLimit(Number.isNaN(nextValue) ? 0 : nextValue);
-                                    }}
-                                />
-                                <div style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.25rem' }}>
-                                    {Math.floor(timeLimit / 60)} minutes {timeLimit % 60} seconds
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Group Size</label>
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <button
-                                        className={`btn ${groupSize === 5 ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => setGroupSize(5)}
-                                        style={{ flex: 1 }}
-                                    >
-                                        5 Digits
-                                    </button>
-                                    <button
-                                        className={`btn ${groupSize === 10 ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => setGroupSize(10)}
-                                        style={{ flex: 1 }}
-                                    >
-                                        10 Digits
-                                    </button>
-                                </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Time Limit (Seconds)</label>
+                            <input
+                                type="number"
+                                className="input-field"
+                                value={config.timeLimit}
+                                min={30}
+                                max={3600}
+                                onChange={(e) => {
+                                    const nextValue = parseInt(e.target.value, 10);
+                                    setConfig(prev => ({ ...prev, timeLimit: Number.isNaN(nextValue) ? 0 : nextValue }));
+                                }}
+                            />
+                            <div style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.25rem' }}>
+                                {Math.floor(config.timeLimit / 60)} minutes {config.timeLimit % 60} seconds
                             </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
-                            <button className="btn btn-primary" onClick={() => startGame()}>
-                                Start Custom Game
-                            </button>
-
-                            <div style={{ borderTop: '1px solid var(--glass-border)', margin: '1rem 0' }}></div>
-
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div>
-                                    <h3 style={{ fontSize: '1rem', fontWeight: 'bold' }}>Week 1 Challenge</h3>
-                                    <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>150 Digits • 10 Minutes</p>
-                                </div>
-                                <button className="btn btn-secondary" onClick={startWeek1Challenge} style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}>
-                                    Start Challenge
-                                </button>
-                            </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Group Size</label>
+                            <ToggleGroup
+                                options={[{ value: 5, label: '5 Digits' }, { value: 10, label: '10 Digits' }]}
+                                value={config.groupSize}
+                                onChange={(groupSize) => setConfig(prev => ({ ...prev, groupSize: groupSize as 5 | 10 }))}
+                            />
                         </div>
                     </div>
-                )}
 
-                {/* MEMORIZE SCREEN */}
-                {gameState === 'memorize' && (
-                    <div className="animate-fade-in">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: timeLeft < 60 ? 'var(--error)' : 'var(--foreground)' }}>
-                                Time Left: {formatTime(timeLeft)}
-                            </div>
-                            <button className="btn btn-primary" onClick={finishMemorization}>
-                                Done Memorizing
-                            </button>
-                        </div>
+                    <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
+                        <button className="btn btn-primary" onClick={() => startGame()}>
+                            Start Custom Game
+                        </button>
 
-                        <div className="glass card" style={{ minHeight: '300px', fontSize: '1.5rem', lineHeight: '2', letterSpacing: '2px', fontFamily: 'monospace' }}>
-                            {formatDigits(digits, groupSize).map((chunk, idx) => (
-                                <span key={idx} style={{ marginRight: '1.5rem', display: 'inline-block' }}>
-                                    {chunk}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* RECALL SCREEN */}
-                {gameState === 'recall' && (
-                    <div className="animate-fade-in">
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>Recall Phase</h2>
-                            <p style={{ opacity: 0.7 }}>Type the digits you remember.</p>
-                        </div>
-
-                        <textarea
-                            className="input-field"
-                            style={{ minHeight: '300px', fontFamily: 'monospace', fontSize: '1.2rem', letterSpacing: '1px' }}
-                            value={userInput}
-                            onChange={(e) => setUserInput(e.target.value)}
-                            placeholder="Enter digits here..."
-                            autoFocus
+                        <PresetManager
+                            gameType="number-wall"
+                            currentConfig={config}
+                            onLoad={cfg => {
+                                setConfig(prev => ({ ...prev, ...cfg }));
+                                const c = cfg as Partial<NumberWallConfig>;
+                                startGame(c.digitCount ?? config.digitCount, c.timeLimit ?? config.timeLimit);
+                            }}
                         />
+                    </div>
+                </div>
+            )}
 
-                        <div style={{ marginTop: '1.5rem' }}>
-                            <button className="btn btn-primary" style={{ width: '100%' }} onClick={submitRecall}>
-                                Submit Recall
-                            </button>
+            {/* MEMORIZE SCREEN */}
+            {phase === 'memorize' && (
+                <div className="animate-fade-in">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                        <CountdownTimer timeLeft={engine.timeLeft} />
+                        <button className="btn btn-primary" onClick={engine.finishMemorize}>
+                            Done Memorizing
+                        </button>
+                    </div>
+
+                    <div className="glass card" style={{ minHeight: '300px', fontSize: '1.5rem', lineHeight: '2', letterSpacing: '2px', fontFamily: 'monospace' }}>
+                        {formatDigitGroups(digits, config.groupSize).map((chunk, idx) => (
+                            <span key={idx} style={{ marginRight: '1.5rem', display: 'inline-block' }}>
+                                {chunk}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* RECALL SCREEN */}
+            {phase === 'recall' && (
+                <div className="animate-fade-in">
+                    <div style={{ marginBottom: '1.5rem' }}>
+                        <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>Recall Phase</h2>
+                        <p style={{ opacity: 0.7 }}>Type the digits you remember.</p>
+                    </div>
+
+                    <textarea
+                        className="input-field"
+                        style={{ minHeight: '300px', fontFamily: 'monospace', fontSize: '1.2rem', letterSpacing: '1px' }}
+                        value={userInput}
+                        onChange={(e) => setUserInput(e.target.value)}
+                        placeholder="Enter digits here..."
+                        autoFocus
+                    />
+
+                    <div style={{ marginTop: '1.5rem' }}>
+                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={submitRecall}>
+                            Submit Recall
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* RESULT SCREEN */}
+            {phase === 'result' && (
+                <ResultsCard saving={engine.saving} onNewGame={engine.reset}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem' }}>
+                        <StatBox
+                            label="Accuracy"
+                            value={`${cleanInputLength > 0 ? Math.round((calculateScore() / cleanInputLength) * 100) : 0}%`}
+                            sublabel={`${calculateScore()} / ${cleanInputLength} Correct`}
+                            valueColor="var(--success)"
+                        />
+                        <StatBox
+                            label="Recall %"
+                            value={`${digits.length > 0 ? Math.round((cleanInputLength / digits.length) * 100) : 0}%`}
+                            sublabel={`${cleanInputLength} / ${digits.length} Attempted`}
+                        />
+                        <StatBox
+                            label="Memorization Time"
+                            value={formatTime(engine.memorizeElapsed)}
+                            span={2}
+                        />
+                    </div>
+
+                    <div style={{ marginBottom: '2rem' }}>
+                        <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>Comparison</h3>
+                        <div style={{ fontFamily: 'monospace', fontSize: '1rem', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '0.5rem', overflowX: 'auto' }}>
+                            <div style={{ marginBottom: '1rem' }}>
+                                <div style={{ fontSize: '0.8rem', opacity: 0.5, marginBottom: '0.25rem' }}>Original:</div>
+                                <div style={{ letterSpacing: '1px', wordBreak: 'break-all' }}>{digits}</div>
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '0.8rem', opacity: 0.5, marginBottom: '0.25rem' }}>Your Recall:</div>
+                                <div style={{ letterSpacing: '1px', wordBreak: 'break-all' }}>
+                                    {userInput.split('').map((char, i) => {
+                                        let color = 'inherit';
+                                        if (i >= digits.length) color = 'var(--error)';
+                                        else if (char === digits[i]) color = 'var(--success)';
+                                        else color = 'var(--error)';
+
+                                        return <span key={i} style={{ color }}>{char}</span>;
+                                    })}
+                                </div>
+                            </div>
                         </div>
                     </div>
-                )}
-
-                {/* RESULT SCREEN */}
-                {gameState === 'result' && (
-                    <div className="glass card animate-fade-in">
-                        <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', textAlign: 'center' }}>Results</h2>
-                        {isSavingResult && (
-                            <p style={{ textAlign: 'center', marginBottom: '1rem', fontSize: '0.9rem', opacity: 0.7 }}>
-                                Saving result…
-                            </p>
-                        )}
-
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem' }}>
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Accuracy</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--success)' }}>
-                                    {userInput.replace(/\s/g, '').length > 0
-                                        ? Math.round((calculateScore() / userInput.replace(/\s/g, '').length) * 100)
-                                        : 0}%
-                                </div>
-                                <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                                    {calculateScore()} / {userInput.replace(/\s/g, '').length} Correct
-                                </div>
-                            </div>
-
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Recall %</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
-                                    {digits.length > 0
-                                        ? Math.round((userInput.replace(/\s/g, '').length / digits.length) * 100)
-                                        : 0}%
-                                </div>
-                                <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                                    {userInput.replace(/\s/g, '').length} / {digits.length} Attempted
-                                </div>
-                            </div>
-
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center', gridColumn: 'span 2' }}>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Memorization Time</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
-                                    {formatTime(Math.floor((endTime - startTime) / 1000))}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ marginBottom: '2rem' }}>
-                            <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>Comparison</h3>
-                            <div style={{ fontFamily: 'monospace', fontSize: '1rem', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '0.5rem', overflowX: 'auto' }}>
-                                <div style={{ marginBottom: '1rem' }}>
-                                    <div style={{ fontSize: '0.8rem', opacity: 0.5, marginBottom: '0.25rem' }}>Original:</div>
-                                    <div style={{ letterSpacing: '1px', wordBreak: 'break-all' }}>{digits}</div>
-                                </div>
-                                <div>
-                                    <div style={{ fontSize: '0.8rem', opacity: 0.5, marginBottom: '0.25rem' }}>Your Recall:</div>
-                                    <div style={{ letterSpacing: '1px', wordBreak: 'break-all' }}>
-                                        {userInput.split('').map((char, i) => {
-                                            const isCorrect = i < digits.length && char === digits[i];
-                                            // If we are past the first error, everything else is technically "void" in strict scoring, 
-                                            // but let's just highlight matches vs mismatches for feedback.
-                                            // Actually, let's highlight the first error specifically.
-
-                                            let color = 'inherit';
-                                            if (i >= digits.length) color = 'var(--error)';
-                                            else if (char === digits[i]) color = 'var(--success)';
-                                            else color = 'var(--error)';
-
-                                            return <span key={i} style={{ color }}>{char}</span>;
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '1rem' }}>
-                            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setGameState('setup')}>
-                                New Game
-                            </button>
-                            <Link href="/training" className="btn btn-primary" style={{ flex: 1 }}>
-                                Back to Hub
-                            </Link>
-                        </div>
-                    </div>
-                )}
-
-            </main>
-        </>
+                </ResultsCard>
+            )}
+        </DrillShell>
     );
 }

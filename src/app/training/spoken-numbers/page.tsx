@@ -1,317 +1,229 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import Header from '@/components/Header';
-import Link from 'next/link';
-import { saveGameResult } from '@/lib/firebase';
+import { useDrillEngine } from '@/hooks/useDrillEngine';
+import DrillShell from '@/components/drill/DrillShell';
+import ResultsCard from '@/components/drill/ResultsCard';
+import StatBox from '@/components/drill/StatBox';
+import PresetManager from '@/components/drill/PresetManager';
+import { generateDigits } from '@/lib/drill-utils';
 
-type GameState = 'setup' | 'playing' | 'recall' | 'result';
+interface Config {
+    digitCount: number;
+    pace: number;
+    groupSize: 1 | 2;
+}
+
+const DEFAULT_CONFIG: Config = { digitCount: 50, pace: 1.0, groupSize: 2 };
 
 export default function SpokenNumbers() {
-    const [gameState, setGameState] = useState<GameState>('setup');
+    const engine = useDrillEngine<Config>({ gameType: 'spoken-numbers', defaultConfig: DEFAULT_CONFIG });
+    const { phase, config, setConfig } = engine;
 
-    // Settings
-    const [digitCount, setDigitCount] = useState(50);
-    const [pace, setPace] = useState(1.0); // seconds per item
-    const [groupSize, setGroupSize] = useState(2); // 1 digit or 2 digits (pair) per spoken item
-
-    // Game Data
-    const [digits, setDigits] = useState<string>("");
-    const [userInput, setUserInput] = useState<string>("");
-    const [currentIndex, setCurrentIndex] = useState(0); // Index of *group* being spoken
+    const [digits, setDigits] = useState('');
+    const [userInput, setUserInput] = useState('');
+    const [currentIndex, setCurrentIndex] = useState(0);
 
     const synthRef = useRef<SpeechSynthesis | null>(null);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            synthRef.current = window.speechSynthesis;
-        }
-        return () => {
-            stopSpeaking();
-        };
+        if (typeof window !== 'undefined') synthRef.current = window.speechSynthesis;
+        return () => stopSpeaking();
     }, []);
 
-    const generateDigits = (count: number) => {
-        let result = "";
-        for (let i = 0; i < count; i++) {
-            result += Math.floor(Math.random() * 10).toString();
-        }
-        return result;
+    const stopSpeaking = () => {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        synthRef.current?.cancel();
     };
 
-    const startWeek5Challenge = () => {
-        setDigitCount(50);
-        setPace(1.0); // 1 second per pair
-        setGroupSize(2);
-        startGame(50, 1.0, 2);
-    };
-
-    const startGame = (count = digitCount, speed = pace, group = groupSize) => {
-        const newDigits = generateDigits(count);
+    const startDrill = (overrideConfig?: Partial<Config>) => {
+        const cfg = { ...config, ...overrideConfig };
+        const newDigits = generateDigits(cfg.digitCount);
         setDigits(newDigits);
-        setUserInput("");
+        setUserInput('');
         setCurrentIndex(0);
-        setGameState('playing');
+        engine.start({ config: overrideConfig });
 
-        // Start Speaking Sequence
-        speakSequence(newDigits, speed, group);
-    };
-
-    const speakSequence = (sequence: string, speed: number, group: number) => {
-        if (!synthRef.current) return;
-
-        // Split into groups
+        // Build groups and speak them at the configured pace
         const chunks: string[] = [];
-        for (let i = 0; i < sequence.length; i += group) {
-            chunks.push(sequence.slice(i, i + group));
+        for (let i = 0; i < newDigits.length; i += cfg.groupSize) {
+            chunks.push(newDigits.slice(i, i + cfg.groupSize));
         }
 
         let i = 0;
-        // Initial delay
         setTimeout(() => {
             intervalRef.current = setInterval(() => {
                 if (i >= chunks.length) {
                     stopSpeaking();
-                    setGameState('recall');
+                    engine.finishMemorize();
                     return;
                 }
-
                 setCurrentIndex(i);
-                const text = chunks[i].split('').join(' '); // "3 7" instead of "thirty seven" usually? 
-                // Memory sports usually read digits individually "three seven" even if paired.
-                // Let's ensure clear digit reading.
-
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 1.2; // Slightly faster base rate to fit in the interval if needed
-                // Adjust rate based on pace? 
-                // Actually, we are controlling the interval manually, so we just need the utterance to finish before the next one.
-                // 1 second is plenty for 2 digits.
-
+                const utterance = new SpeechSynthesisUtterance(chunks[i].split('').join(' '));
+                utterance.rate = 1.2;
                 synthRef.current?.speak(utterance);
                 i++;
-            }, speed * 1000);
-        }, 1000); // 1s start delay
-    };
-
-    const stopSpeaking = () => {
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        if (synthRef.current) synthRef.current.cancel();
+            }, cfg.pace * 1000);
+        }, 1000);
     };
 
     const submitRecall = async () => {
-        const correctCount = calculateScore();
-
-        await saveGameResult({
-            type: 'spoken-numbers',
-            count: digitCount,
-            correct: correctCount,
-            total: digits.length,
-            percentage: Math.round((correctCount / digits.length) * 100),
-            memorizeTime: digitCount / groupSize * pace, // Approximate duration
-            recallTime: 0,
-        });
-
-        setGameState('result');
-    };
-
-    const calculateScore = () => {
-        let correctCount = 0;
         const cleanInput = userInput.replace(/\s/g, '');
-        const cleanActual = digits;
-
-        for (let i = 0; i < cleanActual.length; i++) {
-            if (i < cleanInput.length && cleanInput[i] === cleanActual[i]) {
-                correctCount++;
-            } else {
-                // Stop at first error? Or count total?
-                // Spoken numbers is usually "Sudden Death" (stop at first error).
-                // Let's stick to total correct for training encouragement, but maybe highlight first error.
-                // Actually, let's just count matching characters for now.
-                // But for consistency with "Number Wall", we might want to be strict.
-                // Let's just do raw correct count.
-            }
+        let correct = 0;
+        for (let i = 0; i < digits.length; i++) {
+            if (i < cleanInput.length && cleanInput[i] === digits[i]) correct++;
         }
-        // Actually, let's do raw match count for simplicity in this MVP.
-        let matches = 0;
-        for (let i = 0; i < cleanActual.length; i++) {
-            if (i < cleanInput.length && cleanInput[i] === cleanActual[i]) matches++;
-        }
-        return matches;
+        await engine.finishRecall({
+            count: config.digitCount,
+            correct,
+            total: digits.length,
+            percentage: Math.round((correct / digits.length) * 100),
+            precision: Math.round((correct / digits.length) * 100),
+            completeness: 100,
+        });
     };
+
+    const correctCount = () => {
+        const cleanInput = userInput.replace(/\s/g, '');
+        let c = 0;
+        for (let i = 0; i < digits.length; i++) {
+            if (i < cleanInput.length && cleanInput[i] === digits[i]) c++;
+        }
+        return c;
+    };
+
+    const totalGroups = Math.ceil(config.digitCount / config.groupSize);
 
     return (
-        <>
-            <Header />
-            <main className="container" style={{ maxWidth: '800px' }}>
+        <DrillShell title="Spoken Number Terror">
+            {/* ── SETUP ─────────────────────────────────────────────── */}
+            {phase === 'setup' && (
+                <div style={{ maxWidth: '520px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', opacity: 0.8, fontSize: '0.9rem' }}>Total Digits</label>
+                            <input type="number" className="input-field"
+                                value={config.digitCount} min={10} max={500}
+                                onChange={e => setConfig(c => ({ ...c, digitCount: parseInt(e.target.value) || 50 }))}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', opacity: 0.8, fontSize: '0.9rem' }}>
+                                Pace: {config.pace}s per group
+                            </label>
+                            <input type="range" min={0.5} max={3} step={0.1}
+                                value={config.pace}
+                                onChange={e => setConfig(c => ({ ...c, pace: parseFloat(e.target.value) }))}
+                                style={{ width: '100%' }}
+                            />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', opacity: 0.5 }}>
+                                <span>0.5s (fast)</span><span>3s (slow)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', opacity: 0.8, fontSize: '0.9rem' }}>Grouping</label>
+                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                                {([1, 2] as const).map(g => (
+                                    <button key={g}
+                                        className={`btn ${config.groupSize === g ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setConfig(c => ({ ...c, groupSize: g }))}
+                                        style={{ flex: 1 }}>
+                                        {g} Digit{g > 1 ? 's' : ''}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
 
-                <div style={{ marginBottom: '2rem' }}>
-                    <Link href="/training" style={{ fontSize: '0.9rem', opacity: 0.7, marginBottom: '0.5rem', display: 'inline-block' }}>
-                        ← Back to Training
-                    </Link>
-                    <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Spoken Number Terror</h1>
+                    <PresetManager
+                        gameType="spoken-numbers"
+                        currentConfig={config}
+                        onLoad={cfg => {
+                            setConfig(c => ({ ...c, ...cfg }));
+                            startDrill(cfg as Partial<Config>);
+                        }}
+                    />
+
+                    <button className="btn btn-primary" style={{ padding: '0.85rem', fontSize: '1.1rem' }}
+                        onClick={() => startDrill()}>
+                        Start ({config.digitCount} digits at {config.pace}s / group)
+                    </button>
                 </div>
+            )}
 
-                {gameState === 'setup' && (
-                    <div className="glass card animate-fade-in">
-                        <h2 style={{ marginBottom: '1.5rem', fontSize: '1.2rem' }}>Configuration</h2>
+            {/* ── MEMORIZE (AUDIO) ──────────────────────────────────── */}
+            {phase === 'memorize' && (
+                <div style={{ maxWidth: '480px', margin: '0 auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                    <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${((currentIndex + 1) / totalGroups) * 100}%`, background: 'var(--primary)', transition: 'width 0.3s' }} />
+                    </div>
 
-                        <div style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
+                    <p style={{ opacity: 0.6, fontSize: '0.9rem' }}>Group {currentIndex + 1} / {totalGroups}</p>
+
+                    <div className="glass-panel" style={{
+                        width: '150px', height: '150px', margin: '0 auto', borderRadius: '50%',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'var(--primary)', boxShadow: '0 0 50px rgba(99,102,241,0.4)',
+                    }}>
+                        <span style={{ fontSize: '3rem' }}>🔊</span>
+                    </div>
+
+                    <p style={{ fontSize: '1.1rem', opacity: 0.7 }}>Listen carefully…</p>
+
+                    <button className="btn btn-secondary"
+                        onClick={() => { stopSpeaking(); engine.reset(); }}>
+                        Cancel
+                    </button>
+                </div>
+            )}
+
+            {/* ── RECALL ────────────────────────────────────────────── */}
+            {phase === 'recall' && (
+                <div style={{ maxWidth: '520px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    <h2 style={{ fontSize: '1.1rem', marginBottom: '0' }}>Enter the digits you heard</h2>
+                    <textarea
+                        className="input-field"
+                        style={{ minHeight: '220px', fontFamily: 'monospace', fontSize: '1.2rem', letterSpacing: '1px' }}
+                        value={userInput}
+                        onChange={e => setUserInput(e.target.value)}
+                        placeholder="Enter digits…"
+                        autoFocus
+                    />
+                    <button className="btn btn-primary" style={{ padding: '0.85rem' }} onClick={submitRecall}
+                        disabled={engine.saving}>
+                        {engine.saving ? 'Saving…' : 'Submit Recall'}
+                    </button>
+                </div>
+            )}
+
+            {/* ── RESULT ────────────────────────────────────────────── */}
+            {phase === 'result' && (
+                <div style={{ maxWidth: '520px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <StatBox label="Score" value={`${correctCount()} / ${digits.length}`} valueColor="var(--success)" />
+                        <StatBox label="Pace" value={`${config.pace}s / ${config.groupSize}`} />
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: '0.85rem', opacity: 0.6, marginBottom: '0.5rem' }}>Comparison</p>
+                        <div style={{ fontFamily: 'monospace', fontSize: '1rem', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '0.5rem', wordBreak: 'break-all' }}>
+                            <div style={{ marginBottom: '0.75rem' }}>
+                                <span style={{ opacity: 0.5, fontSize: '0.8rem' }}>Actual: </span>
+                                <span>{digits}</span>
+                            </div>
                             <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Total Digits</label>
-                                <input
-                                    type="number"
-                                    className="input-field"
-                                    value={digitCount}
-                                    onChange={(e) => setDigitCount(parseInt(e.target.value) || 0)}
-                                />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Pace (Seconds per Group)</label>
-                                <input
-                                    type="number"
-                                    className="input-field"
-                                    step="0.1"
-                                    value={pace}
-                                    onChange={(e) => setPace(parseFloat(e.target.value) || 1)}
-                                />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Grouping</label>
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <button className={`btn ${groupSize === 1 ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setGroupSize(1)} style={{ flex: 1 }}>1 Digit</button>
-                                    <button className={`btn ${groupSize === 2 ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setGroupSize(2)} style={{ flex: 1 }}>2 Digits</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
-                            <button className="btn btn-primary" onClick={() => startGame()}>
-                                Start Custom Game
-                            </button>
-
-                            <div style={{ borderTop: '1px solid var(--glass-border)', margin: '1rem 0' }}></div>
-
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div>
-                                    <h3 style={{ fontSize: '1rem', fontWeight: 'bold' }}>Week 5 Challenge</h3>
-                                    <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>50 Digits • 1.0s / Pair</p>
-                                </div>
-                                <button className="btn btn-secondary" onClick={startWeek5Challenge} style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}>
-                                    Start Challenge
-                                </button>
+                                <span style={{ opacity: 0.5, fontSize: '0.8rem' }}>You:    </span>
+                                {userInput.replace(/\s/g, '').split('').map((char, i) => (
+                                    <span key={i} style={{ color: i < digits.length && char === digits[i] ? 'var(--success)' : 'var(--error)' }}>{char}</span>
+                                ))}
                             </div>
                         </div>
                     </div>
-                )}
 
-                {gameState === 'playing' && (
-                    <div className="animate-fade-in" style={{ textAlign: 'center', padding: '4rem 0' }}>
-                        <div style={{ fontSize: '1.5rem', marginBottom: '2rem', opacity: 0.7 }}>
-                            Listen carefully...
-                        </div>
-
-                        <div className="glass" style={{
-                            width: '150px',
-                            height: '150px',
-                            margin: '0 auto',
-                            borderRadius: '50%',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            background: 'var(--primary)',
-                            boxShadow: '0 0 50px var(--primary-hover)'
-                        }}>
-                            <div style={{ fontSize: '3rem' }}>🔊</div>
-                        </div>
-
-                        <div style={{ marginTop: '2rem', fontSize: '1rem', opacity: 0.5 }}>
-                            Group {currentIndex + 1} / {Math.ceil(digitCount / groupSize)}
-                        </div>
-
-                        <button className="btn btn-secondary" style={{ marginTop: '2rem' }} onClick={() => { stopSpeaking(); setGameState('setup'); }}>
-                            Cancel
-                        </button>
-                    </div>
-                )}
-
-                {gameState === 'recall' && (
-                    <div className="animate-fade-in">
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <h2 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>Recall Phase</h2>
-                            <p style={{ opacity: 0.7 }}>Enter the digits you heard.</p>
-                        </div>
-
-                        <textarea
-                            className="input-field"
-                            style={{ minHeight: '300px', fontFamily: 'monospace', fontSize: '1.2rem', letterSpacing: '1px' }}
-                            value={userInput}
-                            onChange={(e) => setUserInput(e.target.value)}
-                            placeholder="Enter digits..."
-                            autoFocus
-                        />
-
-                        <div style={{ marginTop: '1.5rem' }}>
-                            <button className="btn btn-primary" style={{ width: '100%' }} onClick={submitRecall}>
-                                Submit Recall
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {gameState === 'result' && (
-                    <div className="glass card animate-fade-in">
-                        <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', textAlign: 'center' }}>Results</h2>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem' }}>
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Score</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--success)' }}>
-                                    {calculateScore()} / {digits.length}
-                                </div>
-                            </div>
-
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Pace</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>
-                                    {pace}s / {groupSize}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ marginBottom: '2rem' }}>
-                            <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>Comparison</h3>
-                            <div style={{ fontFamily: 'monospace', fontSize: '1rem', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '0.5rem', overflowX: 'auto', wordBreak: 'break-all' }}>
-                                <div style={{ marginBottom: '1rem' }}>
-                                    <div style={{ fontSize: '0.8rem', opacity: 0.5 }}>Actual:</div>
-                                    <div>{digits}</div>
-                                </div>
-                                <div>
-                                    <div style={{ fontSize: '0.8rem', opacity: 0.5 }}>You:</div>
-                                    <div>
-                                        {userInput.replace(/\s/g, '').split('').map((char, i) => {
-                                            const isCorrect = i < digits.length && char === digits[i];
-                                            return <span key={i} style={{ color: isCorrect ? 'var(--success)' : 'var(--error)' }}>{char}</span>
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '1rem' }}>
-                            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setGameState('setup')}>
-                                New Game
-                            </button>
-                            <Link href="/training" className="btn btn-primary" style={{ flex: 1 }}>
-                                Back to Hub
-                            </Link>
-                        </div>
-                    </div>
-                )}
-
-            </main>
-        </>
+                    <ResultsCard onNewGame={engine.reset}>{null}</ResultsCard>
+                </div>
+            )}
+        </DrillShell>
     );
 }

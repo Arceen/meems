@@ -124,13 +124,15 @@ export default function CardSequence() {
         // Save result
         try {
             await saveGameResult({
-                type: 'card-blitz', // Using card-blitz type for now or generic 'card'
+                type: 'card-sequence',
                 count: cardCount,
                 correct,
                 total: cardCount,
                 percentage: (correct / cardCount) * 100,
                 memorizeTime: memorizeTime / 1000,
                 recallTime: (endTime - startTime) / 1000,
+                precision: Math.round((correct / cardCount) * 100),
+                completeness: 100,
             });
         } catch (e) {
             console.error(e);
